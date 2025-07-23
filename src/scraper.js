@@ -5,6 +5,7 @@ const inquirer = require('inquirer');
 const chalk = require('chalk');
 const CsvReader = require('./utils/csv-reader');
 const SizeCalculator = require('./utils/size-calculator');
+const NgWordChecker = require('./utils/ngword-checker');
 
 class AmazonJapanScraper {
   constructor() {
@@ -12,6 +13,7 @@ class AmazonJapanScraper {
     this.page = null;
     this.allDetailedProducts = [];
     this.categorySummary = [];
+    this.ngWordChecker = new NgWordChecker();
   }
 
   async run() {
@@ -269,11 +271,18 @@ class AmazonJapanScraper {
       // サイズ計算
       const sizeConditions = SizeCalculator.checkAllConditions(sizeWeight.weight, sizeWeight.dimensions);
 
-      // 他サイトの情報を取得（JANコード優先）
-      const otherSitesInfo = await this.getOtherSitesInfo(productTitle, productCodes);
+      // 基本的な商品情報オブジェクトを作成
+      const basicProduct = {
+        商品名: productTitle,
+        商品説明: description,
+        カテゴリ階層: categoryBreadcrumb
+      };
 
-      // 最安価格と最短配送を計算
-      const comparison = this.calculateBestOptions(priceInfo, shippingInfo, otherSitesInfo);
+      // NGワードチェック
+      const ngWordResult = this.ngWordChecker.checkProduct(basicProduct);
+      if (ngWordResult.hasNgWord) {
+        console.log(chalk.yellow(`      ⚠️  NGワード検出: ${ngWordResult.ngWordList}`));
+      }
 
       return {
         取得日時: new Date().toLocaleString('ja-JP'),
@@ -298,25 +307,8 @@ class AmazonJapanScraper {
         重量500g以内: sizeConditions.weightUnder500g ? 'はい' : 'いいえ',
         '100サイズ以内': sizeConditions.sizeUnder100 ? 'はい' : 'いいえ',
         '120サイズ以内': sizeConditions.sizeUnder120 ? 'はい' : 'いいえ',
-        楽天価格: otherSitesInfo.rakuten.price,
-        楽天配送: otherSitesInfo.rakuten.delivery,
-        楽天URL: otherSitesInfo.rakuten.url,
-        Yahoo価格: otherSitesInfo.yahoo.price,
-        Yahoo配送: otherSitesInfo.yahoo.delivery,
-        YahooURL: otherSitesInfo.yahoo.url,
-        ヨドバシ価格: otherSitesInfo.yodobashi.price,
-        ヨドバシ配送: otherSitesInfo.yodobashi.delivery,
-        ヨドバシURL: otherSitesInfo.yodobashi.url,
-        ヤマダ価格: otherSitesInfo.yamada.price,
-        ヤマダ配送: otherSitesInfo.yamada.delivery,
-        ヤマダURL: otherSitesInfo.yamada.url,
-        ビック価格: otherSitesInfo.bic.price,
-        ビック配送: otherSitesInfo.bic.delivery,
-        ビックURL: otherSitesInfo.bic.url,
-        最安価格: comparison.bestPrice,
-        最安サイト: comparison.bestPriceSite,
-        最短配送: comparison.fastestDelivery,
-        最短配送サイト: comparison.fastestDeliverySite
+        NGワード検出: ngWordResult.hasNgWord ? 'はい' : 'いいえ',
+        検出NGワード: ngWordResult.ngWordList || 'N/A'
       };
 
     } catch (error) {
@@ -475,30 +467,6 @@ class AmazonJapanScraper {
     return productCodes;
   }
 
-  // 最適な検索キーワードを決定
-  getBestSearchKeyword(productTitle, productCodes) {
-    // 優先順位: JAN > UPC > EAN > ISBN > 商品名
-    if (productCodes.jan !== 'N/A') {
-      console.log(chalk.gray(`      🔍 JANコードで検索: ${productCodes.jan}`));
-      return { keyword: productCodes.jan, type: 'JAN' };
-    }
-    if (productCodes.upc !== 'N/A') {
-      console.log(chalk.gray(`      🔍 UPCコードで検索: ${productCodes.upc}`));
-      return { keyword: productCodes.upc, type: 'UPC' };
-    }
-    if (productCodes.ean !== 'N/A') {
-      console.log(chalk.gray(`      🔍 EANコードで検索: ${productCodes.ean}`));
-      return { keyword: productCodes.ean, type: 'EAN' };
-    }
-    if (productCodes.isbn !== 'N/A') {
-      console.log(chalk.gray(`      🔍 ISBNコードで検索: ${productCodes.isbn}`));
-      return { keyword: productCodes.isbn, type: 'ISBN' };
-    }
-    
-    console.log(chalk.gray(`      🔍 商品名で検索: ${productTitle.substring(0, 30)}...`));
-    return { keyword: productTitle.substring(0, 50), type: '商品名' };
-  }
-
   extractSizeAndWeight($, description) {
     let weight = 'N/A';
     let dimensions = 'N/A';
@@ -553,213 +521,6 @@ class AmazonJapanScraper {
     return { weight, dimensions };
   }
 
-  async getOtherSitesInfo(productName, productCodes) {
-    const sites = {
-      rakuten: { price: 'N/A', delivery: 'N/A', url: 'N/A' },
-      yahoo: { price: 'N/A', delivery: 'N/A', url: 'N/A' },
-      yodobashi: { price: 'N/A', delivery: 'N/A', url: 'N/A' },
-      yamada: { price: 'N/A', delivery: 'N/A', url: 'N/A' },
-      bic: { price: 'N/A', delivery: 'N/A', url: 'N/A' }
-    };
-
-    // 最適な検索キーワードを決定
-    const searchInfo = this.getBestSearchKeyword(productName, productCodes);
-    
-    try {
-      // 楽天市場
-      sites.rakuten = await this.searchRakuten(searchInfo.keyword, searchInfo.type);
-      await this.delay(2000);
-      
-      // Yahoo!ショッピング
-      sites.yahoo = await this.searchYahoo(searchInfo.keyword, searchInfo.type);
-      await this.delay(2000);
-      
-      // ヨドバシ.com
-      sites.yodobashi = await this.searchYodobashi(searchInfo.keyword, searchInfo.type);
-      await this.delay(2000);
-      
-      // ヤマダデンキ
-      sites.yamada = await this.searchYamada(searchInfo.keyword, searchInfo.type);
-      await this.delay(2000);
-      
-      // ビックカメラ
-      sites.bic = await this.searchBic(searchInfo.keyword, searchInfo.type);
-      await this.delay(2000);
-      
-    } catch (error) {
-      console.error(chalk.yellow(`他サイト検索エラー: ${error.message}`));
-    }
-
-    return sites;
-  }
-
-  async searchRakuten(query, searchType) {
-    try {
-      console.log(chalk.gray(`        🛒 楽天で${searchType}検索: ${query.substring(0, 20)}...`));
-      const searchUrl = `https://search.rakuten.co.jp/search/mall/${encodeURIComponent(query)}`;
-      await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 15000 });
-      
-      const content = await this.page.content();
-      const $ = cheerio.load(content);
-      
-      const firstItem = $('.searchresultitem').first();
-      if (firstItem.length === 0) return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-      
-      const price = firstItem.find('.important').text().trim().replace(/[^\d,]/g, '') || 'N/A';
-      const delivery = firstItem.find('.delivery').text().trim() || 'N/A';
-      const url = firstItem.find('a').attr('href') || 'N/A';
-      
-      return { price, delivery, url };
-    } catch (error) {
-      return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-    }
-  }
-
-  async searchYahoo(query, searchType) {
-    try {
-      console.log(chalk.gray(`        🛒 Yahooで${searchType}検索: ${query.substring(0, 20)}...`));
-      const searchUrl = `https://shopping.yahoo.co.jp/search?p=${encodeURIComponent(query)}`;
-      await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 15000 });
-      
-      const content = await this.page.content();
-      const $ = cheerio.load(content);
-      
-      const firstItem = $('.Product').first();
-      if (firstItem.length === 0) return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-      
-      const price = firstItem.find('.Product__price').text().trim().replace(/[^\d,]/g, '') || 'N/A';
-      const delivery = firstItem.find('.Product__delivery').text().trim() || 'N/A';
-      const url = firstItem.find('a').attr('href') || 'N/A';
-      
-      return { price, delivery, url: url.startsWith('http') ? url : `https://shopping.yahoo.co.jp${url}` };
-    } catch (error) {
-      return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-    }
-  }
-
-  async searchYodobashi(query, searchType) {
-    try {
-      console.log(chalk.gray(`        🛒 ヨドバシで${searchType}検索: ${query.substring(0, 20)}...`));
-      const searchUrl = `https://www.yodobashi.com/category/search/?word=${encodeURIComponent(query)}`;
-      await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 15000 });
-      
-      const content = await this.page.content();
-      const $ = cheerio.load(content);
-      
-      const firstItem = $('.pListItem').first();
-      if (firstItem.length === 0) return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-      
-      const price = firstItem.find('.pPrice').text().trim().replace(/[^\d,]/g, '') || 'N/A';
-      const delivery = firstItem.find('.pDelivery').text().trim() || 'N/A';
-      const url = firstItem.find('a').attr('href') || 'N/A';
-      
-      return { price, delivery, url: url.startsWith('http') ? url : `https://www.yodobashi.com${url}` };
-    } catch (error) {
-      return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-    }
-  }
-
-  async searchYamada(query, searchType) {
-    try {
-      console.log(chalk.gray(`        🛒 ヤマダで${searchType}検索: ${query.substring(0, 20)}...`));
-      const searchUrl = `https://www.yamada-denkiweb.com/search/?word=${encodeURIComponent(query)}`;
-      await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 15000 });
-      
-      const content = await this.page.content();
-      const $ = cheerio.load(content);
-      
-      const firstItem = $('.p-result-item').first();
-      if (firstItem.length === 0) return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-      
-      const price = firstItem.find('.p-result-item__price').text().trim().replace(/[^\d,]/g, '') || 'N/A';
-      const delivery = firstItem.find('.p-result-item__delivery').text().trim() || 'N/A';
-      const url = firstItem.find('a').attr('href') || 'N/A';
-      
-      return { price, delivery, url: url.startsWith('http') ? url : `https://www.yamada-denkiweb.com${url}` };
-    } catch (error) {
-      return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-    }
-  }
-
-  async searchBic(query, searchType) {
-    try {
-      console.log(chalk.gray(`        🛒 ビックで${searchType}検索: ${query.substring(0, 20)}...`));
-      const searchUrl = `https://www.biccamera.com/bc/category/search/?q=${encodeURIComponent(query)}`;
-      await this.page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 15000 });
-      
-      const content = await this.page.content();
-      const $ = cheerio.load(content);
-      
-      const firstItem = $('.bcs_item').first();
-      if (firstItem.length === 0) return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-      
-      const price = firstItem.find('.bcs_price').text().trim().replace(/[^\d,]/g, '') || 'N/A';
-      const delivery = firstItem.find('.bcs_delivery').text().trim() || 'N/A';
-      const url = firstItem.find('a').attr('href') || 'N/A';
-      
-      return { price, delivery, url: url.startsWith('http') ? url : `https://www.biccamera.com${url}` };
-    } catch (error) {
-      return { price: 'N/A', delivery: 'N/A', url: 'N/A' };
-    }
-  }
-
-  calculateBestOptions(amazonPrice, amazonShipping, otherSites) {
-    const allPrices = [
-      { site: 'Amazon', price: amazonPrice.currentPrice, delivery: amazonShipping.deliveryDays }
-    ];
-
-    // 他サイトの価格を追加
-    Object.entries(otherSites).forEach(([siteName, info]) => {
-      if (info.price !== 'N/A') {
-        allPrices.push({
-          site: siteName,
-          price: info.price,
-          delivery: info.delivery
-        });
-      }
-    });
-
-    // 最安価格を計算
-    let bestPrice = 'N/A';
-    let bestPriceSite = 'N/A';
-    let minPrice = Infinity;
-
-    allPrices.forEach(item => {
-      const numPrice = parseInt(item.price.replace(/[^\d]/g, ''));
-      if (!isNaN(numPrice) && numPrice < minPrice) {
-        minPrice = numPrice;
-        bestPrice = item.price;
-        bestPriceSite = item.site;
-      }
-    });
-
-    // 最短配送を計算
-    let fastestDelivery = 'N/A';
-    let fastestDeliverySite = 'N/A';
-    let minDays = Infinity;
-
-    allPrices.forEach(item => {
-      if (item.delivery !== 'N/A') {
-        const dayMatch = item.delivery.match(/(\d+)/);
-        if (dayMatch) {
-          const days = parseInt(dayMatch[1]);
-          if (days < minDays) {
-            minDays = days;
-            fastestDelivery = item.delivery;
-            fastestDeliverySite = item.site;
-          }
-        }
-      }
-    });
-
-    return {
-      bestPrice,
-      bestPriceSite,
-      fastestDelivery,
-      fastestDeliverySite
-    };
-  }
-
   async saveToCSV(products, categoryName) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const filename = `amazon_ranking_${categoryName}_${timestamp}.csv`;
@@ -786,25 +547,8 @@ class AmazonJapanScraper {
         { id: '重量500g以内', title: '重量500g以内' },
         { id: '100サイズ以内', title: '100サイズ以内' },
         { id: '120サイズ以内', title: '120サイズ以内' },
-        { id: '楽天価格', title: '楽天価格' },
-        { id: '楽天配送', title: '楽天配送' },
-        { id: '楽天URL', title: '楽天URL' },
-        { id: 'Yahoo価格', title: 'Yahoo価格' },
-        { id: 'Yahoo配送', title: 'Yahoo配送' },
-        { id: 'YahooURL', title: 'YahooURL' },
-        { id: 'ヨドバシ価格', title: 'ヨドバシ価格' },
-        { id: 'ヨドバシ配送', title: 'ヨドバシ配送' },
-        { id: 'ヨドバシURL', title: 'ヨドバシURL' },
-        { id: 'ヤマダ価格', title: 'ヤマダ価格' },
-        { id: 'ヤマダ配送', title: 'ヤマダ配送' },
-        { id: 'ヤマダURL', title: 'ヤマダURL' },
-        { id: 'ビック価格', title: 'ビック価格' },
-        { id: 'ビック配送', title: 'ビック配送' },
-        { id: 'ビックURL', title: 'ビックURL' },
-        { id: '最安価格', title: '最安価格' },
-        { id: '最安サイト', title: '最安サイト' },
-        { id: '最短配送', title: '最短配送' },
-        { id: '最短配送サイト', title: '最短配送サイト' }
+        { id: 'NGワード検出', title: 'NGワード検出' },
+        { id: '検出NGワード', title: '検出NGワード' }
       ]
     });
 
