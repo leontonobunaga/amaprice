@@ -1,0 +1,30 @@
+{
+  "name": "amazon-japan-scraper",
+  "version": "1.0.0",
+  "description": "Amazon Japan ranking scraper with CSV export",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "build": "node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "amazon",
+    "scraper",
+    "ranking",
+    "csv",
+    "japan"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "cheerio": "^1.0.0-rc.12",
+    "csv-parser": "^3.2.0",
+    "csv-writer": "^1.6.0",
+    "inquirer": "^8.2.6",
+    "puppeteer": "^21.0.0"
+  }
+}
